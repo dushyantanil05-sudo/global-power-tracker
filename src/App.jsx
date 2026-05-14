@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 
+// rss2json converts RSS to JSON with CORS support
 const RSS = (url) =>
-  `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&count=8`;
+  `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&count=10`;
 
+// Each category gets its own targeted RSS feed — no keyword filtering needed
 const CATEGORIES = [
   {
     id: "trump", label: "Trump Family", icon: "🦅", color: "#c0392b",
@@ -10,23 +12,20 @@ const CATEGORIES = [
       "https://feeds.bbci.co.uk/news/world/us-canada/rss.xml",
       "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml",
     ],
-    keywords: ["trump","ivanka","kushner","melania","don jr","eric trump","trump family","trump org"],
   },
   {
     id: "ambani", label: "Ambani Family", icon: "💎", color: "#8e44ad",
     feeds: [
       "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
-      "https://www.business-standard.com/rss/markets-106.rss",
+      "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",
     ],
-    keywords: ["ambani","reliance","jio","mukesh","nita ambani","isha","akash"],
   },
   {
     id: "adani", label: "Adani Group", icon: "⚡", color: "#e67e22",
     feeds: [
       "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
-      "https://www.business-standard.com/rss/markets-106.rss",
+      "https://www.business-standard.com/rss/companies-101.rss",
     ],
-    keywords: ["adani","gautam adani","adani group","adani enterprises","adani port"],
   },
   {
     id: "geopolitical", label: "Geopolitical", icon: "🌐", color: "#16a085",
@@ -34,7 +33,6 @@ const CATEGORIES = [
       "https://feeds.bbci.co.uk/news/world/rss.xml",
       "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     ],
-    keywords: ["war","conflict","nato","sanctions","nuclear","crisis","russia","ukraine","china","taiwan","iran","gaza","israel"],
   },
   {
     id: "markets", label: "Market Triggers", icon: "📊", color: "#2980b9",
@@ -42,7 +40,6 @@ const CATEGORIES = [
       "https://feeds.bbci.co.uk/news/business/rss.xml",
       "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
     ],
-    keywords: ["market","stock","fed","rate","inflation","recession","tariff","crash","oil","gold","nasdaq","economy","gdp"],
   },
 ];
 
@@ -59,7 +56,7 @@ function timeAgo(d) {
 }
 
 function getRisk(articles) {
-  const words = ["war","crisis","crash","collapse","sanction","attack","nuclear","plunge","scandal","fraud","arrest","bomb","conflict"];
+  const words = ["war","crisis","crash","collapse","sanction","attack","nuclear","plunge","scandal","fraud","arrest","bomb","conflict","surge","threat"];
   const score = articles.reduce((n, a) => {
     const t = (a.title + " " + (a.description || "")).toLowerCase();
     return n + words.filter(w => t.includes(w)).length;
@@ -72,8 +69,8 @@ function getRisk(articles) {
 
 function getSignal(title, desc) {
   const t = (title + " " + (desc || "")).toLowerCase();
-  const bear = ["crash","fall","drop","decline","plunge","loss","crisis","war","sanction","fraud","arrest","ban","collapse","slump"];
-  const bull = ["surge","rise","gain","growth","profit","deal","record","boost","rally","strong","invest","launch","soar"];
+  const bear = ["crash","fall","drop","decline","plunge","loss","crisis","war","sanction","fraud","arrest","ban","collapse","slump","deficit","risk","threat"];
+  const bull = ["surge","rise","gain","growth","profit","deal","record","boost","rally","strong","invest","launch","soar","high","jump"];
   const b = bear.filter(w => t.includes(w)).length;
   const u = bull.filter(w => t.includes(w)).length;
   if (b > u) return { icon:"▼", label:"BEARISH", color:"#e74c3c" };
@@ -83,27 +80,33 @@ function getSignal(title, desc) {
 
 async function fetchFeed(cat) {
   const results = [];
+
   for (const feedUrl of cat.feeds) {
     try {
       const res = await fetch(RSS(feedUrl));
       if (!res.ok) continue;
       const data = await res.json();
-      if (data.status !== "ok") continue;
-      results.push(...(data.items || []));
-    } catch { continue; }
+      if (data.status !== "ok" || !data.items?.length) continue;
+      results.push(...data.items);
+    } catch {
+      continue;
+    }
   }
-  const filtered = cat.keywords
-    ? results.filter(a => {
-        const text = (a.title + " " + (a.description || "")).toLowerCase();
-        return cat.keywords.some(k => text.includes(k));
-      })
-    : results;
-  const final = filtered.length > 0 ? filtered : results;
+
+  if (!results.length) throw new Error("Could not reach any news feeds. Check your internet connection.");
+
+  // Deduplicate by title
   const seen = new Set();
-  return final
-    .filter(a => { if (seen.has(a.title)) return false; seen.add(a.title); return true; })
-    .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate))
-    .slice(0, 8);
+  const unique = results.filter(a => {
+    if (!a.title || seen.has(a.title)) return false;
+    seen.add(a.title);
+    return true;
+  });
+
+  // Sort by date, newest first
+  return unique
+    .sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0))
+    .slice(0, 10);
 }
 
 export default function App() {
@@ -115,7 +118,7 @@ export default function App() {
   const [ticker,     setTicker]     = useState([
     "YOUR HIGHNESS — STRATEGIC INTELLIGENCE DASHBOARD ACTIVE",
     "MONITORING: TRUMP · AMBANI · ADANI · GEOPOLITICAL · MARKETS",
-    "SELECT A FEED TO LOAD LIVE INTELLIGENCE · NO API KEY NEEDED",
+    "SELECT A FEED TO LOAD LIVE INTELLIGENCE",
   ]);
 
   const activeCat   = CATEGORIES.find(c => c.id === activeTab);
@@ -134,7 +137,6 @@ export default function App() {
     setActiveTab(cat.id);
     try {
       const articles = await fetchFeed(cat);
-      if (!articles.length) throw new Error("No articles found right now. Try again in a moment.");
       const risk = getRisk(articles);
       setFeedData(p => ({ ...p, [cat.id]: { articles, risk } }));
       setTimestamps(p => ({ ...p, [cat.id]: new Date().toLocaleTimeString() }));
@@ -142,7 +144,10 @@ export default function App() {
         const order = ["CRITICAL","HIGH","MODERATE","LOW"];
         return order[Math.min(order.indexOf(p), order.indexOf(risk))];
       });
-      setTicker(p => [`${cat.icon} ${cat.label.toUpperCase()} — ${articles.length} ARTICLES — RISK: ${risk}`, ...p.slice(0,5)]);
+      setTicker(p => [
+        `${cat.icon} ${cat.label.toUpperCase()} — ${articles.length} LIVE ARTICLES — RISK: ${risk}`,
+        ...p.slice(0, 5),
+      ]);
     } catch (err) {
       setFeedData(p => ({ ...p, [cat.id]: { error: true, msg: err.message } }));
     }
@@ -207,7 +212,7 @@ export default function App() {
           <div style={{ marginTop:"auto", padding:"10px", background:"#080e08", borderRadius:"4px", border:"1px solid #0f1e0f" }}>
             <div style={{ fontSize:"8px", color:"#1a2a1a", letterSpacing:"2px", marginBottom:"5px" }}>FEEDS LOADED</div>
             <div style={{ fontSize:"20px", fontWeight:"bold", color:"#00cc7a" }}>
-              {Object.values(feedData).filter(d=>d&&!d.error).length}
+              {Object.values(feedData).filter(d => d && !d.error).length}
               <span style={{ fontSize:"11px", color:"#2a3a2a", fontWeight:"normal" }}> / {CATEGORIES.length}</span>
             </div>
           </div>
@@ -215,6 +220,7 @@ export default function App() {
 
         {/* MAIN */}
         <div style={{ flex:1, overflowY:"auto", padding:"24px" }}>
+
           {!activeTab && (
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:"24px", animation:"fadein .5s ease" }}>
               <div style={{ fontSize:"52px" }}>🛰️</div>
@@ -252,8 +258,12 @@ export default function App() {
             <div style={{ animation:"fadein .4s ease" }}>
               <div style={{ display:"flex", gap:"20px", marginBottom:"22px", alignItems:"flex-start" }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontSize:"8px", color:"#2a3a2a", letterSpacing:"3px", marginBottom:"8px" }}>{activeCat?.icon} {activeCat?.label.toUpperCase()} · LIVE FEED · {currentData.articles?.length} ARTICLES · {timestamps[activeTab]}</div>
-                  <div style={{ fontSize:"12px", lineHeight:1.7, color:"#5a6a5a", borderLeft:`3px solid ${activeCat?.color}`, paddingLeft:"16px" }}>Live news from BBC, NYT and major global sources. Risk score auto-calculated from headline sentiment.</div>
+                  <div style={{ fontSize:"8px", color:"#2a3a2a", letterSpacing:"3px", marginBottom:"8px" }}>
+                    {activeCat?.icon} {activeCat?.label.toUpperCase()} · LIVE FEED · {currentData.articles?.length} ARTICLES · {timestamps[activeTab]}
+                  </div>
+                  <div style={{ fontSize:"12px", lineHeight:1.7, color:"#5a6a5a", borderLeft:`3px solid ${activeCat?.color}`, paddingLeft:"16px" }}>
+                    Live news sourced from BBC and NYT. Risk score calculated from headline sentiment analysis.
+                  </div>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:"8px", alignItems:"flex-end" }}>
                   <div style={{ padding:"10px 18px", background:`${RISK_COLOR[currentData.risk]}0e`, border:`1px solid ${RISK_COLOR[currentData.risk]}44`, borderRadius:"6px", textAlign:"center", minWidth:"90px" }}>
@@ -272,10 +282,13 @@ export default function App() {
                       <div className="acard" style={{ background:"#0a1018", border:"1px solid #0f1a10", borderLeft:`2px solid ${activeCat?.color}88`, borderRadius:"5px", padding:"14px 18px", animation:`fadein .4s ease ${i*.06}s both` }}>
                         <div style={{ display:"flex", flexWrap:"wrap", gap:"7px", marginBottom:"8px", alignItems:"center" }}>
                           <span style={{ fontSize:"10px", fontWeight:"bold", color:sig.color }}>{sig.icon} {sig.label}</span>
-                          <span style={{ fontSize:"9px", color:"#2a3a2a", marginLeft:"auto" }}>{a.author || ""} · {timeAgo(a.pubDate)}</span>
+                          <span style={{ fontSize:"9px", color:"#2a3a2a", marginLeft:"auto" }}>{timeAgo(a.pubDate)}</span>
                         </div>
                         <div style={{ fontSize:"12px", fontWeight:"bold", color:"#c8d4c8", marginBottom:"6px", lineHeight:1.5 }}>{a.title}</div>
-                        <div style={{ fontSize:"11px", color:"#4a5a4a", lineHeight:1.65 }}>{(a.description || "").replace(/<[^>]*>/g,"").slice(0,180)}{(a.description||"").length>180?"…":""}</div>
+                        <div style={{ fontSize:"11px", color:"#4a5a4a", lineHeight:1.65 }}>
+                          {(a.description || "").replace(/<[^>]*>/g, "").slice(0, 200)}
+                          {(a.description || "").length > 200 ? "…" : ""}
+                        </div>
                         <div style={{ fontSize:"9px", color:`${activeCat?.color}88`, marginTop:"6px" }}>READ FULL ARTICLE →</div>
                       </div>
                     </a>
