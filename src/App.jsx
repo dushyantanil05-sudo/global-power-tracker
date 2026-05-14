@@ -1,23 +1,30 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ── TWELVE DATA ───────────────────────────────────────────────────────────────
-const TWELVE_CHANGE_URL = (symbols, key) =>
-  `https://api.twelvedata.com/quote?symbol=${symbols}&apikey=${key}`;
+// Free tier: 800 req/day, 8 req/min
+// We fetch each symbol individually to handle errors gracefully
+const TD_QUOTE = (symbol, key) =>
+  `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${key}`;
 
+// Reduced to 8 symbols to stay safely within rate limits
 const STOCKS = [
-  { symbol: "RELIANCE:NSE",   name: "RELIANCE",  group: "INDIA",       currency: "₹" },
-  { symbol: "ADANIENT:NSE",   name: "ADANI ENT", group: "INDIA",       currency: "₹" },
-  { symbol: "ADANIPORTS:NSE", name: "ADANI PRT", group: "INDIA",       currency: "₹" },
-  { symbol: "NIFTY:NSE",      name: "NIFTY 50",  group: "INDIA",       currency: "₹" },
-  { symbol: "SENSEX:BSE",     name: "SENSEX",    group: "INDIA",       currency: "₹" },
-  { symbol: "SPX:NYSE",       name: "S&P 500",   group: "GLOBAL",      currency: "$" },
-  { symbol: "DJI:NYSE",       name: "DOW JONES", group: "GLOBAL",      currency: "$" },
-  { symbol: "IXIC:NASDAQ",    name: "NASDAQ",    group: "GLOBAL",      currency: "$" },
-  { symbol: "XAU/USD",        name: "GOLD",      group: "COMMODITIES", currency: "$" },
-  { symbol: "WTI/USD",        name: "CRUDE OIL", group: "COMMODITIES", currency: "$" },
-  { symbol: "BTC/USD",        name: "BITCOIN",   group: "COMMODITIES", currency: "$" },
+  { symbol: "RELIANCE",  exchange: "NSE", name: "RELIANCE",  group: "INDIA",       currency: "₹" },
+  { symbol: "ADANIENT",  exchange: "NSE", name: "ADANI ENT", group: "INDIA",       currency: "₹" },
+  { symbol: "NIFTY 50",  exchange: "NSE", name: "NIFTY 50",  group: "INDIA",       currency: "₹" },
+  { symbol: "SPX",       exchange: "NYSE",name: "S&P 500",   group: "GLOBAL",      currency: "$" },
+  { symbol: "IXIC",      exchange: "NASDAQ",name: "NASDAQ",  group: "GLOBAL",      currency: "$" },
+  { symbol: "XAU/USD",   exchange: "",    name: "GOLD",      group: "COMMODITIES", currency: "$" },
+  { symbol: "BTC/USD",   exchange: "",    name: "BITCOIN",   group: "COMMODITIES", currency: "$" },
+  { symbol: "WTI/USD",   exchange: "",    name: "CRUDE OIL", group: "COMMODITIES", currency: "$" },
 ];
+
 const GROUPS = ["INDIA", "GLOBAL", "COMMODITIES"];
+
+// Build the full symbol string Twelve Data expects
+function tdSymbol(s) {
+  if (!s.exchange) return s.symbol; // forex/crypto like XAU/USD
+  return `${s.symbol}:${s.exchange}`;
+}
 
 // ── NEWS FEEDS ────────────────────────────────────────────────────────────────
 const RSS = (url) =>
@@ -36,8 +43,8 @@ const CATEGORIES = [
     feeds:["https://feeds.bbci.co.uk/news/business/rss.xml","https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"] },
 ];
 
-const RISK_COLOR   = { CRITICAL:"#ff2222", HIGH:"#ff6600", MODERATE:"#ffcc00", LOW:"#00ff88" };
-const RISK_BG      = { CRITICAL:"#2a0000", HIGH:"#1a0a00", MODERATE:"#1a1400", LOW:"#001a0a" };
+const RISK_COLOR = { CRITICAL:"#ff2222", HIGH:"#ff6600", MODERATE:"#ffcc00", LOW:"#00ff88" };
+const RISK_BG    = { CRITICAL:"#2a0000", HIGH:"#1a0a00", MODERATE:"#1a1400", LOW:"#001a0a" };
 
 function timeAgo(d) {
   if (!d) return "";
@@ -72,17 +79,18 @@ function getSignal(title, desc) {
 }
 
 function fmtPrice(price, currency) {
-  if (price==null||isNaN(price)) return "—";
+  if (price==null||isNaN(price)||price==="N/A") return "—";
   const n = parseFloat(price);
-  return currency + n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  if (isNaN(n)) return "—";
+  return currency + n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 
-// ── STOCK TICKER ──────────────────────────────────────────────────────────────
+// ── STOCK TICKER BAR ──────────────────────────────────────────────────────────
 function StockBar({ stockData }) {
-  const items = STOCKS.filter(s=>stockData[s.symbol]?.price).map(s => {
+  const items = STOCKS.filter(s => stockData[s.symbol]?.price).map(s => {
     const d = stockData[s.symbol];
-    const up = parseFloat(d.changePct||0)>=0;
-    return { text:`${s.name}  ${fmtPrice(d.price,s.currency)}  ${up?"▲":"▼"}${Math.abs(parseFloat(d.changePct||0)).toFixed(2)}%`, up };
+    const up = parseFloat(d.changePct||0) >= 0;
+    return { text:`${s.name}  ${fmtPrice(d.price, s.currency)}  ${up?"▲":"▼"}${Math.abs(parseFloat(d.changePct||0)).toFixed(2)}%`, up };
   });
   if (!items.length) return null;
   return (
@@ -117,10 +125,9 @@ function StockPanel({ stockData, lastUpdated, onRefresh, loading, apiKey, setApi
           onChange={e=>setKeyInput(e.target.value)}
           onKeyDown={e=>{ if(e.key==="Enter"&&keyInput.trim()){ localStorage.setItem("td_key",keyInput.trim()); setApiKey(keyInput.trim()); }}}
           placeholder="PASTE API KEY..."
-          style={{ width:"100%", background:"#0a0a0a", border:"2px solid #00ff8844", borderRadius:"0", padding:"8px 10px", color:"#00ff88", fontFamily:"'Courier New',monospace", fontSize:"10px", outline:"none", letterSpacing:"1px" }}
+          style={{ width:"100%", background:"#0a0a0a", border:"2px solid #00ff8844", padding:"8px 10px", color:"#00ff88", fontFamily:"'Courier New',monospace", fontSize:"10px", outline:"none", letterSpacing:"1px" }}
         />
-        <button
-          onClick={()=>{ if(keyInput.trim()){ localStorage.setItem("td_key",keyInput.trim()); setApiKey(keyInput.trim()); }}}
+        <button onClick={()=>{ if(keyInput.trim()){ localStorage.setItem("td_key",keyInput.trim()); setApiKey(keyInput.trim()); }}}
           style={{ width:"100%", background:"#00ff88", border:"none", padding:"10px", color:"#000", fontFamily:"'Courier New',monospace", fontSize:"11px", fontWeight:"bold", cursor:"pointer", letterSpacing:"3px" }}>
           ACTIVATE
         </button>
@@ -130,7 +137,6 @@ function StockPanel({ stockData, lastUpdated, onRefresh, loading, apiKey, setApi
 
   return (
     <div style={{ width:"240px", flexShrink:0, borderLeft:"2px solid #00ff88", background:"#000", overflowY:"auto", display:"flex", flexDirection:"column" }}>
-      {/* Panel header */}
       <div style={{ padding:"12px 14px", borderBottom:"1px solid #00ff8833", display:"flex", alignItems:"center", justifyContent:"space-between", background:"#001a0a", flexShrink:0 }}>
         <div>
           <div style={{ fontSize:"10px", color:"#00ff88", letterSpacing:"3px", fontWeight:"bold" }}>LIVE MARKETS</div>
@@ -147,7 +153,6 @@ function StockPanel({ stockData, lastUpdated, onRefresh, loading, apiKey, setApi
       <div style={{ padding:"12px", flex:1 }}>
         {GROUPS.map(group => (
           <div key={group} style={{ marginBottom:"20px" }}>
-            {/* Group label */}
             <div style={{ fontSize:"9px", color:"#00ff88", letterSpacing:"4px", fontWeight:"bold", marginBottom:"8px", borderBottom:"1px solid #00ff8822", paddingBottom:"4px" }}>
               ── {group}
             </div>
@@ -156,15 +161,16 @@ function StockPanel({ stockData, lastUpdated, onRefresh, loading, apiKey, setApi
               const price = d?.price;
               const changePct = d?.changePct;
               const up = changePct!=null ? parseFloat(changePct)>=0 : null;
+              const hasData = price && price!=="N/A" && !isNaN(parseFloat(price));
               return (
-                <div key={s.symbol} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 6px", marginBottom:"3px", borderLeft:`2px solid ${up===null?"#333":up?"#00ff88":"#ff4444"}`, paddingLeft:"10px", background:"#050f08" }}>
+                <div key={s.symbol} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 6px", marginBottom:"3px", borderLeft:`2px solid ${up===null?"#222":up?"#00ff88":"#ff4444"}`, paddingLeft:"10px", background:"#050f08" }}>
                   <div style={{ fontSize:"10px", color:"#aabbaa", fontWeight:"bold", letterSpacing:"1px" }}>{s.name}</div>
                   <div style={{ textAlign:"right" }}>
-                    {loading && !price && <div style={{ fontSize:"10px", color:"#444", animation:"pulse 1s infinite" }}>···</div>}
-                    {!loading && !price && <div style={{ fontSize:"11px", color:"#333", fontWeight:"bold" }}>—</div>}
-                    {price && (
+                    {loading && !hasData && <div style={{ fontSize:"10px", color:"#444", animation:"pulse 1s infinite" }}>···</div>}
+                    {!loading && !hasData && <div style={{ fontSize:"11px", color:"#333", fontWeight:"bold" }}>—</div>}
+                    {hasData && (
                       <>
-                        <div style={{ fontSize:"11px", fontWeight:"bold", color:"#ffffff", letterSpacing:"1px" }}>{fmtPrice(price,s.currency)}</div>
+                        <div style={{ fontSize:"11px", fontWeight:"bold", color:"#ffffff", letterSpacing:"1px" }}>{fmtPrice(price, s.currency)}</div>
                         {changePct!=null && (
                           <div style={{ fontSize:"10px", fontWeight:"bold", color:up?"#00ff88":"#ff4444", letterSpacing:"1px" }}>
                             {up?"▲":"▼"}{Math.abs(parseFloat(changePct)).toFixed(2)}%
@@ -178,6 +184,12 @@ function StockPanel({ stockData, lastUpdated, onRefresh, loading, apiKey, setApi
             })}
           </div>
         ))}
+
+        {loading && Object.keys(stockData).length === 0 && (
+          <div style={{ fontSize:"10px", color:"#446644", textAlign:"center", padding:"20px 0", animation:"pulse 1.5s infinite", letterSpacing:"2px" }}>
+            ACQUIRING DATA...
+          </div>
+        )}
       </div>
     </div>
   );
@@ -197,35 +209,50 @@ export default function App() {
   const [ticker,       setTicker]       = useState([
     "YOUR HIGHNESS — STRATEGIC INTELLIGENCE DASHBOARD ACTIVE",
     "MONITORING: TRUMP · AMBANI · ADANI · GEOPOLITICAL · MARKETS",
-    "RELIANCE · ADANI · SENSEX · S&P 500 · GOLD · OIL · BTC",
+    "RELIANCE · ADANI · NIFTY · S&P 500 · GOLD · OIL · BTC",
   ]);
 
   const activeCat   = CATEGORIES.find(c=>c.id===activeTab);
   const currentData = activeTab ? feedData[activeTab] : null;
 
+  // Fetch stocks one at a time with a small delay to avoid rate limits
   const loadStocks = useCallback(async () => {
     if (!apiKey) return;
     setStockLoading(true);
-    try {
-      const symbols = STOCKS.map(s=>s.symbol).join(",");
-      const res = await fetch(TWELVE_CHANGE_URL(symbols, apiKey));
-      if (!res.ok) throw new Error("API error");
-      const data = await res.json();
-      if (data.status==="error") throw new Error(data.message);
-      const newData = {};
-      STOCKS.forEach(s => {
-        const q = data[s.symbol];
-        if (!q||q.status==="error") return;
-        newData[s.symbol] = { price:q.close||q.price, change:q.change, changePct:q.percent_change };
-      });
-      setStockData(newData);
-      setStockUpdated(new Date().toLocaleTimeString());
-    } catch(err) { console.error("Stock error:", err.message); }
+    const newData = { ...stockData };
+
+    for (let i = 0; i < STOCKS.length; i++) {
+      const s = STOCKS[i];
+      try {
+        const sym = tdSymbol(s);
+        const res = await fetch(TD_QUOTE(sym, apiKey));
+        if (!res.ok) continue;
+        const q = await res.json();
+        if (q.status === "error" || !q.close) continue;
+        newData[s.symbol] = {
+          price:     q.close,
+          change:    q.change,
+          changePct: q.percent_change,
+        };
+      } catch { continue; }
+
+      // Small delay between requests to respect rate limit
+      if (i < STOCKS.length - 1) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
+    setStockData(newData);
+    setStockUpdated(new Date().toLocaleTimeString());
     setStockLoading(false);
   }, [apiKey]);
 
   useEffect(() => {
-    if (apiKey) { loadStocks(); const t=setInterval(loadStocks,300000); return ()=>clearInterval(t); }
+    if (apiKey) {
+      loadStocks();
+      const t = setInterval(loadStocks, 300000); // every 5 min
+      return () => clearInterval(t);
+    }
   }, [apiKey, loadStocks]);
 
   useEffect(() => {
@@ -273,10 +300,6 @@ export default function App() {
         @keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:.2} }
         @keyframes fadein  { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
         @keyframes blink   { 0%,100%{opacity:1} 50%{opacity:0} }
-        @keyframes scanline {
-          0%  { background-position: 0 0; }
-          100%{ background-position: 0 100%; }
-        }
         .cbtn:hover { background:rgba(0,255,136,.08)!important; border-color:#00ff88!important; }
         .acard { transition:transform .12s, border-color .12s; }
         .acard:hover { transform:translateX(4px); border-left-color:#00ff88!important; }
@@ -284,15 +307,12 @@ export default function App() {
         ::-webkit-scrollbar { width:4px; }
         ::-webkit-scrollbar-thumb { background:#00ff8833; }
         ::-webkit-scrollbar-track { background:#000; }
-        ::selection { background:#00ff8833; }
       `}</style>
 
-      {/* ── HEADER ── */}
-      <div style={{ borderBottom:"2px solid #00ff88", padding:"0", background:"#000", flexShrink:0, position:"relative", overflow:"hidden" }}>
-        {/* Scanline overlay */}
-        <div style={{ position:"absolute", inset:0, backgroundImage:"repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,136,.03) 2px, rgba(0,255,136,.03) 4px)", pointerEvents:"none", zIndex:1 }} />
-
-        <div style={{ padding:"14px 24px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"relative", zIndex:2 }}>
+      {/* HEADER */}
+      <div style={{ borderBottom:"2px solid #00ff88", background:"#000", flexShrink:0, position:"relative", overflow:"hidden" }}>
+        <div style={{ position:"absolute", inset:0, backgroundImage:"repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,136,.03) 2px, rgba(0,255,136,.03) 4px)", pointerEvents:"none" }} />
+        <div style={{ padding:"14px 24px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"relative", zIndex:1 }}>
           <div>
             <div style={{ fontSize:"9px", letterSpacing:"5px", color:"#00ff88", marginBottom:"4px", opacity:.7 }}>
               ▸ HOUSE OF OMMI &amp; BEAUMONT · STRATEGIC INTELLIGENCE UNIT · CLASSIFIED
@@ -316,7 +336,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── NEWS TICKER ── */}
+      {/* NEWS TICKER */}
       <div style={{ background:"#001a0a", borderBottom:"1px solid #00ff8833", padding:"6px 0", overflow:"hidden", flexShrink:0 }}>
         <div style={{ display:"flex", gap:"80px", animation:"ticker 35s linear infinite", whiteSpace:"nowrap", width:"max-content" }}>
           {[...ticker,...ticker].map((t,i) => (
@@ -325,10 +345,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── STOCK PRICE TICKER ── */}
+      {/* STOCK PRICE TICKER */}
       <StockBar stockData={stockData} />
 
-      {/* ── BODY ── */}
+      {/* BODY */}
       <div style={{ display:"flex", flex:1, overflow:"hidden" }}>
 
         {/* SIDEBAR */}
@@ -336,7 +356,6 @@ export default function App() {
           <div style={{ fontSize:"9px", color:"#00ff88", letterSpacing:"4px", fontWeight:"bold", padding:"0 6px", marginBottom:"10px", borderBottom:"1px solid #00ff8822", paddingBottom:"8px" }}>
             ── INTEL FEEDS
           </div>
-
           {CATEGORIES.map(cat => {
             const isActive = activeTab===cat.id;
             const d = feedData[cat.id];
@@ -346,17 +365,12 @@ export default function App() {
                 <div style={{ flex:1, minWidth:0 }}>
                   <div style={{ fontSize:"10px", fontWeight:"bold", marginBottom:"3px", color:isActive?"#ffffff":cat.color, letterSpacing:"1px" }}>{cat.label}</div>
                   {loading[cat.id] && <div style={{ fontSize:"8px", color:"#00ff88", animation:"pulse 1s infinite", letterSpacing:"2px" }}>SCANNING...</div>}
-                  {!loading[cat.id] && d && !d.error && (
-                    <div style={{ fontSize:"8px", color:RISK_COLOR[d.risk], letterSpacing:"1px", fontWeight:"bold" }}>
-                      ■ {d.risk} · {timestamps[cat.id]}
-                    </div>
-                  )}
+                  {!loading[cat.id] && d && !d.error && <div style={{ fontSize:"8px", color:RISK_COLOR[d.risk], letterSpacing:"1px", fontWeight:"bold" }}>■ {d.risk} · {timestamps[cat.id]}</div>}
                   {!loading[cat.id] && d?.error && <div style={{ fontSize:"8px", color:"#ff4444", letterSpacing:"1px" }}>⚠ SIGNAL LOST</div>}
                 </div>
               </button>
             );
           })}
-
           <div style={{ marginTop:"auto", padding:"12px 8px", background:"#001a0a", border:"1px solid #00ff8833" }}>
             <div style={{ fontSize:"8px", color:"#446644", letterSpacing:"3px", marginBottom:"6px" }}>FEEDS ACTIVE</div>
             <div style={{ fontSize:"24px", fontWeight:"bold", color:"#00ff88", textShadow:"0 0 10px #00ff8866" }}>
@@ -368,7 +382,6 @@ export default function App() {
 
         {/* MAIN PANEL */}
         <div style={{ flex:1, overflowY:"auto", padding:"24px", position:"relative" }}>
-          {/* Subtle scanline texture */}
           <div style={{ position:"fixed", inset:0, backgroundImage:"repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,255,136,.008) 3px, rgba(0,255,136,.008) 4px)", pointerEvents:"none", zIndex:0 }} />
 
           {/* Welcome */}
@@ -376,16 +389,13 @@ export default function App() {
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100%", gap:"28px", animation:"fadein .5s ease", position:"relative", zIndex:1 }}>
               <div style={{ textAlign:"center" }}>
                 <div style={{ fontSize:"60px", marginBottom:"8px", filter:"drop-shadow(0 0 20px #00ff88)" }}>🛰️</div>
-                <div style={{ fontSize:"16px", color:"#ffffff", letterSpacing:"6px", fontWeight:"bold", marginBottom:"6px" }}>
-                  SELECT INTELLIGENCE FEED
-                </div>
-                <div style={{ fontSize:"10px", color:"#446644", letterSpacing:"3px" }}>
-                  LIVE NEWS · LIVE PRICES · AUTO-REFRESH 5–10 MIN
-                </div>
+                <div style={{ fontSize:"16px", color:"#ffffff", letterSpacing:"6px", fontWeight:"bold", marginBottom:"6px" }}>SELECT INTELLIGENCE FEED</div>
+                <div style={{ fontSize:"10px", color:"#446644", letterSpacing:"3px" }}>LIVE NEWS · LIVE PRICES · AUTO-REFRESH 5–10 MIN</div>
               </div>
               <div style={{ display:"flex", gap:"10px", flexWrap:"wrap", justifyContent:"center" }}>
                 {CATEGORIES.map(cat => (
-                  <button key={cat.id} onClick={()=>loadFeed(cat)} style={{ background:"#000", border:`2px solid ${cat.color}`, padding:"12px 20px", color:cat.color, cursor:"pointer", fontFamily:"inherit", fontSize:"11px", letterSpacing:"2px", fontWeight:"bold", transition:"all .15s" }}
+                  <button key={cat.id} onClick={()=>loadFeed(cat)}
+                    style={{ background:"#000", border:`2px solid ${cat.color}`, padding:"12px 20px", color:cat.color, cursor:"pointer", fontFamily:"inherit", fontSize:"11px", letterSpacing:"2px", fontWeight:"bold", transition:"all .15s" }}
                     onMouseEnter={e=>{ e.currentTarget.style.background=cat.color; e.currentTarget.style.color="#000"; }}
                     onMouseLeave={e=>{ e.currentTarget.style.background="#000"; e.currentTarget.style.color=cat.color; }}>
                     {cat.icon} {cat.label}
@@ -399,9 +409,7 @@ export default function App() {
           {activeTab && loading[activeTab] && (
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"60%", gap:"20px", position:"relative", zIndex:1 }}>
               <div style={{ width:"40px", height:"40px", border:`2px solid ${activeCat?.color}`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin .7s linear infinite" }} />
-              <div style={{ fontSize:"11px", color:"#00ff88", letterSpacing:"5px", fontWeight:"bold", animation:"pulse 1.5s infinite" }}>
-                ACQUIRING SIGNAL...
-              </div>
+              <div style={{ fontSize:"11px", color:"#00ff88", letterSpacing:"5px", fontWeight:"bold", animation:"pulse 1.5s infinite" }}>ACQUIRING SIGNAL...</div>
             </div>
           )}
 
@@ -409,9 +417,7 @@ export default function App() {
           {activeTab && !loading[activeTab] && currentData?.error && (
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"60%", gap:"16px", position:"relative", zIndex:1 }}>
               <div style={{ fontSize:"11px", color:"#ff4444", letterSpacing:"5px", fontWeight:"bold" }}>⚠ SIGNAL LOST</div>
-              <div style={{ fontSize:"11px", color:"#664444", maxWidth:"460px", textAlign:"center", padding:"14px 18px", background:"#0a0000", border:"1px solid #ff444433", lineHeight:1.8, letterSpacing:"1px" }}>
-                {currentData.msg}
-              </div>
+              <div style={{ fontSize:"11px", color:"#664444", maxWidth:"460px", textAlign:"center", padding:"14px 18px", background:"#0a0000", border:"1px solid #ff444433", lineHeight:1.8, letterSpacing:"1px" }}>{currentData.msg}</div>
               <button onClick={()=>activeCat&&loadFeed(activeCat)} style={{ background:"transparent", border:"2px solid #ff4444", color:"#ff4444", padding:"10px 24px", cursor:"pointer", fontFamily:"inherit", fontSize:"11px", letterSpacing:"3px", fontWeight:"bold" }}>
                 ↺ REACQUIRE
               </button>
@@ -421,23 +427,19 @@ export default function App() {
           {/* Intel feed */}
           {activeTab && !loading[activeTab] && currentData && !currentData.error && (
             <div style={{ animation:"fadein .3s ease", position:"relative", zIndex:1 }}>
-
-              {/* Feed header */}
               <div style={{ display:"flex", gap:"20px", marginBottom:"24px", alignItems:"flex-start" }}>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:"9px", color:"#446644", letterSpacing:"4px", marginBottom:"8px" }}>
                     {activeCat?.icon} {activeCat?.label} · LIVE FEED · {currentData.articles?.length} ARTICLES · {timestamps[activeTab]}
                   </div>
                   <div style={{ fontSize:"13px", lineHeight:1.7, color:"#aaccaa", borderLeft:`3px solid ${activeCat?.color}`, paddingLeft:"16px", letterSpacing:"0.5px" }}>
-                    Live intelligence sourced from BBC and NYT. Risk index calculated from real-time headline analysis.
+                    Live intelligence from BBC and NYT. Risk index calculated from real-time headline analysis.
                   </div>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", gap:"8px", alignItems:"flex-end", flexShrink:0 }}>
                   <div style={{ padding:"12px 20px", background:RISK_BG[currentData.risk], border:`2px solid ${RISK_COLOR[currentData.risk]}`, textAlign:"center", minWidth:"100px" }}>
                     <div style={{ fontSize:"8px", color:"#446644", letterSpacing:"3px", marginBottom:"4px" }}>RISK</div>
-                    <div style={{ fontSize:"15px", fontWeight:"bold", color:RISK_COLOR[currentData.risk], letterSpacing:"3px", textShadow:`0 0 10px ${RISK_COLOR[currentData.risk]}` }}>
-                      {currentData.risk}
-                    </div>
+                    <div style={{ fontSize:"15px", fontWeight:"bold", color:RISK_COLOR[currentData.risk], letterSpacing:"3px", textShadow:`0 0 10px ${RISK_COLOR[currentData.risk]}` }}>{currentData.risk}</div>
                   </div>
                   <button onClick={()=>activeCat&&loadFeed(activeCat)} style={{ background:"transparent", border:`1px solid ${activeCat?.color}66`, color:activeCat?.color, padding:"7px 16px", cursor:"pointer", fontFamily:"inherit", fontSize:"10px", letterSpacing:"2px", fontWeight:"bold" }}>
                     ↺ REFRESH
@@ -445,13 +447,12 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Articles */}
               <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
                 {(currentData.articles||[]).map((a,i) => {
                   const sig = getSignal(a.title, a.description);
                   return (
                     <a key={i} href={a.link} target="_blank" rel="noreferrer">
-                      <div className="acard" style={{ background:"#000", border:`1px solid #00ff8818`, borderLeft:`3px solid #00ff8833`, padding:"14px 18px", animation:`fadein .3s ease ${i*.05}s both` }}>
+                      <div className="acard" style={{ background:"#000", border:"1px solid #00ff8818", borderLeft:"3px solid #00ff8833", padding:"14px 18px", animation:`fadein .3s ease ${i*.05}s both` }}>
                         <div style={{ display:"flex", flexWrap:"wrap", gap:"10px", marginBottom:"8px", alignItems:"center" }}>
                           <span style={{ fontSize:"10px", fontWeight:"bold", color:sig.color, letterSpacing:"2px" }}>{sig.icon} {sig.label}</span>
                           <span style={{ fontSize:"9px", color:"#334433", letterSpacing:"1px", marginLeft:"auto" }}>{timeAgo(a.pubDate)}</span>
@@ -461,9 +462,7 @@ export default function App() {
                           {(a.description||"").replace(/<[^>]*>/g,"").slice(0,220)}
                           {(a.description||"").length>220?"…":""}
                         </div>
-                        <div style={{ fontSize:"9px", color:`${activeCat?.color}99`, marginTop:"8px", letterSpacing:"2px", fontWeight:"bold" }}>
-                          READ FULL REPORT →
-                        </div>
+                        <div style={{ fontSize:"9px", color:`${activeCat?.color}99`, marginTop:"8px", letterSpacing:"2px", fontWeight:"bold" }}>READ FULL REPORT →</div>
                       </div>
                     </a>
                   );
